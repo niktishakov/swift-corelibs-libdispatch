@@ -1,0 +1,76 @@
+name: Android
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  push:
+    branches: [android-ci]
+  workflow_dispatch:
+
+jobs:
+  android-emulator-tests:
+    name: Android tests (x86_64, API ${{ matrix.api }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [23, 34]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Show the NDK
+        run: |
+          echo "ANDROID_NDK_LATEST_HOME=$ANDROID_NDK_LATEST_HOME"
+          grep Pkg.Revision "$ANDROID_NDK_LATEST_HOME/source.properties"
+      - name: Build libdispatch and the tests
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -yq ninja-build
+          cmake -G Ninja -S . -B build \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=x86_64 \
+            -DANDROID_PLATFORM=android-23 \
+            -DBUILD_TESTING=ON \
+            -DENABLE_SWIFT=NO
+          cmake --build build
+      - name: Enable KVM and free disk space
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo rm -rf /opt/microsoft /opt/google /opt/az /opt/ghc /usr/share/dotnet /usr/local/share/boost /opt/hostedtoolcache /usr/local/share/chromium
+          df -h /
+      - name: Start the emulator
+        env:
+          API: ${{ matrix.api }}
+        run: |
+          SDK_BIN="$ANDROID_HOME/cmdline-tools/latest/bin"
+          IMAGE="system-images;android-${API};default;x86_64"
+          yes | "$SDK_BIN/sdkmanager" --licenses > /dev/null || true
+          "$SDK_BIN/sdkmanager" --install "emulator" "platform-tools" "$IMAGE" > /dev/null
+          echo no | "$SDK_BIN/avdmanager" create avd --force -n test --package "$IMAGE" --device pixel
+          nohup "$ANDROID_HOME/emulator/emulator" -avd test -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -no-metrics -memory 4096 -partition-size 2048 > emulator.log 2>&1 &
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" wait-for-device
+          for i in $(seq 1 120); do
+            if [ "$("$ADB" shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; then
+              echo "Booted after $((i * 5)) seconds"
+              exit 0
+            fi
+            sleep 5
+          done
+          cat emulator.log
+          exit 1
+      - name: Run the tests in the emulator
+        run: |
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" shell getprop ro.build.version.sdk
+          "$ADB" push build /data/local/tmp/dispatch > /dev/null
+          # adb shell does not return the exit status before API 24, so print it
+          "$ADB" shell 'sh /data/local/tmp/dispatch/tests/ctest-android.sh; echo "exit status: $?"' | tee test-output.txt
+          grep -q "exit status: 0" test-output.txt
