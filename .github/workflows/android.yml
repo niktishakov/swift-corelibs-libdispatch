@@ -51,7 +51,7 @@ jobs:
           API: ${{ matrix.api }}
         run: |
           export PATH="$PATH:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin"
-          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export ANDROID_AVD_HOME="${XDG_CONFIG_HOME:-$HOME}/.android/avd"
           IMAGE="system-images;android-${API};default;x86_64"
           yes | sdkmanager --licenses > /dev/null || true
           sdkmanager --install "emulator" "platform-tools" "platforms;android-${API}" "$IMAGE" > /dev/null
