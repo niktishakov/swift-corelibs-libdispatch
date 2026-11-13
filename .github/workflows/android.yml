@@ -46,31 +46,32 @@ jobs:
           sudo rm -rf /opt/microsoft /opt/google /opt/az /opt/ghc /usr/share/dotnet /usr/local/share/boost /opt/hostedtoolcache /usr/local/share/chromium
           df -h /
       - name: Start the emulator
+        timeout-minutes: 15
         env:
           API: ${{ matrix.api }}
         run: |
-          SDK_BIN="$ANDROID_HOME/cmdline-tools/latest/bin"
+          export PATH="$PATH:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin"
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
           IMAGE="system-images;android-${API};default;x86_64"
-          yes | "$SDK_BIN/sdkmanager" --licenses > /dev/null || true
-          "$SDK_BIN/sdkmanager" --install "emulator" "platform-tools" "$IMAGE" > /dev/null
-          echo no | "$SDK_BIN/avdmanager" create avd --force -n test --package "$IMAGE" --device pixel
-          nohup "$ANDROID_HOME/emulator/emulator" -avd test -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -no-metrics -memory 4096 -partition-size 2048 > emulator.log 2>&1 &
-          ADB="$ANDROID_HOME/platform-tools/adb"
-          "$ADB" wait-for-device
-          for i in $(seq 1 120); do
-            if [ "$("$ADB" shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; then
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "emulator" "platform-tools" "platforms;android-${API}" "$IMAGE" > /dev/null
+          avdmanager create avd --force -n test --package "$IMAGE" --device "Nexus 10"
+          emulator -accel-check
+          nohup emulator -no-metrics -partition-size 1024 -memory 4096 -wipe-data -no-window -no-snapshot -noaudio -no-boot-anim -avd test > emulator.log 2>&1 &
+          for i in $(seq 1 60); do
+            sleep 5
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
               echo "Booted after $((i * 5)) seconds"
               exit 0
             fi
-            sleep 5
           done
           cat emulator.log
           exit 1
       - name: Run the tests in the emulator
         run: |
-          ADB="$ANDROID_HOME/platform-tools/adb"
-          "$ADB" shell getprop ro.build.version.sdk
-          "$ADB" push build /data/local/tmp/dispatch > /dev/null
+          export PATH="$PATH:$ANDROID_HOME/platform-tools"
+          adb shell getprop ro.build.version.sdk
+          adb push build /data/local/tmp/dispatch > /dev/null
           # adb shell does not return the exit status before API 24, so print it
-          "$ADB" shell 'sh /data/local/tmp/dispatch/tests/ctest-android.sh; echo "exit status: $?"' | tee test-output.txt
+          adb shell 'sh /data/local/tmp/dispatch/tests/ctest-android.sh; echo "exit status: $?"' | tee test-output.txt
           grep -q "exit status: 0" test-output.txt
