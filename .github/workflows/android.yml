@@ -7,7 +7,7 @@ on:
   pull_request:
     types: [opened, reopened, synchronize]
   push:
-    branches: [android-ci]
+    branches: [android-ci, epollerr-ci]
   workflow_dispatch:
 
 jobs:
@@ -79,3 +79,17 @@ jobs:
           ls staging
           adb push staging /data/local/tmp/dispatch > /dev/null
           adb shell sh /data/local/tmp/dispatch/tests/ctest-android.sh
+
+  linux-tests:
+    name: Linux tests (fork check only)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build and run the epoll tests
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -yq ninja-build clang
+          cmake -G Ninja -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBUILD_TESTING=ON -DENABLE_SWIFT=NO
+          cmake --build build
+          cd build && ctest -R "read_err|read_hup" --output-on-failure -V | grep -E "PERF|PASS|FAIL|Test #"
