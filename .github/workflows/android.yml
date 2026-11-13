@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api: [23, 34]
+        api: [26, 34]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -71,7 +71,11 @@ jobs:
         run: |
           export PATH="$PATH:$ANDROID_HOME/platform-tools"
           adb shell getprop ro.build.version.sdk
-          adb push build /data/local/tmp/dispatch > /dev/null
-          # adb shell does not return the exit status before API 24, so print it
-          adb shell 'sh /data/local/tmp/dispatch/tests/ctest-android.sh; echo "exit status: $?"' | tee test-output.txt
-          grep -q "exit status: 0" test-output.txt
+          # push the test binaries and libraries without the build tree's symlinks
+          mkdir -p staging/tests
+          find build -maxdepth 1 -type f \( -name 'dispatch_*' -o -name bsdtestharness \) -exec cp {} staging/ \;
+          find build -type f -name '*.so' -exec cp {} staging/ \;
+          cp build/tests/ctest-android.sh staging/tests/
+          ls staging
+          adb push staging /data/local/tmp/dispatch > /dev/null
+          adb shell sh /data/local/tmp/dispatch/tests/ctest-android.sh
