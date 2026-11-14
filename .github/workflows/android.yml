@@ -78,4 +78,5 @@ jobs:
           cp build/tests/ctest-android.sh staging/tests/
           ls staging
           adb push staging /data/local/tmp/dispatch > /dev/null
-          adb shell sh /data/local/tmp/dispatch/tests/ctest-android.sh
+          # older Android shells set no TMPDIR, and the tests fall back to /tmp
+          adb shell TMPDIR=/data/local/tmp sh /data/local/tmp/dispatch/tests/ctest-android.sh
