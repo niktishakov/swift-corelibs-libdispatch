@@ -92,4 +92,4 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -yq ninja-build clang
           cmake -G Ninja -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBUILD_TESTING=ON -DENABLE_SWIFT=NO
           cmake --build build
-          cd build && ctest -R "read_err|read_hup" --output-on-failure -V | grep -E "PERF|PASS|FAIL|Test #"
+          cd build && ctest --output-on-failure
