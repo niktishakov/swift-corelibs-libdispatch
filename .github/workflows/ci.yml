@@ -1,0 +1,98 @@
+name: Tests
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  push:
+    branches: [dispatch-ci]
+  workflow_dispatch:
+
+jobs:
+  linux-tests:
+    name: Linux tests (x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build libdispatch and run the tests
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -yq ninja-build clang
+          cmake -G Ninja -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBUILD_TESTING=ON -DENABLE_SWIFT=NO
+          cmake --build build
+          cd build && ctest --output-on-failure
+
+  android-emulator-tests:
+    name: Android tests (x86_64, API ${{ matrix.api }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [26, 34]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Show the NDK
+        run: |
+          echo "ANDROID_NDK_LATEST_HOME=$ANDROID_NDK_LATEST_HOME"
+          grep Pkg.Revision "$ANDROID_NDK_LATEST_HOME/source.properties"
+      - name: Build libdispatch and the tests
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -yq ninja-build
+          cmake -G Ninja -S . -B build \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=x86_64 \
+            -DANDROID_PLATFORM=android-23 \
+            -DBUILD_TESTING=ON \
+            -DENABLE_SWIFT=NO
+          cmake --build build
+      - name: Enable KVM and free disk space
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo rm -rf /opt/microsoft /opt/google /opt/az /opt/ghc /usr/share/dotnet /usr/local/share/boost /opt/hostedtoolcache /usr/local/share/chromium
+          df -h /
+      - name: Start the emulator
+        timeout-minutes: 15
+        env:
+          API: ${{ matrix.api }}
+        run: |
+          export PATH="$PATH:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin"
+          export ANDROID_AVD_HOME="${XDG_CONFIG_HOME:-$HOME}/.android/avd"
+          IMAGE="system-images;android-${API};default;x86_64"
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "emulator" "platform-tools" "platforms;android-${API}" "$IMAGE" > /dev/null
+          avdmanager create avd --force -n test --package "$IMAGE" --device "Nexus 10"
+          emulator -accel-check
+          nohup emulator -no-metrics -partition-size 1024 -memory 4096 -wipe-data -no-window -no-snapshot -noaudio -no-boot-anim -avd test > emulator.log 2>&1 &
+          for i in $(seq 1 60); do
+            sleep 5
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+              echo "Booted after $((i * 5)) seconds"
+              exit 0
+            fi
+          done
+          cat emulator.log
+          exit 1
+      - name: Run the tests in the emulator
+        run: |
+          export PATH="$PATH:$ANDROID_HOME/platform-tools"
+          adb shell getprop ro.build.version.sdk
+          # push the test binaries and libraries without the build tree's symlinks
+          mkdir -p staging/tests
+          find build -maxdepth 1 -type f \( -name 'dispatch_*' -o -name bsdtestharness \) -exec cp {} staging/ \;
+          find build -type f -name '*.so' -exec cp {} staging/ \;
+          cp build/tests/ctest-android.sh staging/tests/
+          ls staging
+          adb push staging /data/local/tmp/dispatch > /dev/null
+          # older Android shells set no TMPDIR, and the tests fall back to /tmp
+          adb shell TMPDIR=/data/local/tmp sh /data/local/tmp/dispatch/tests/ctest-android.sh
